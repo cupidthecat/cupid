@@ -2,7 +2,7 @@
 
 **cupid** is a lightweight, FOSS (Free and Open Source Software) text editor designed for GNU/Linux systems. Built with simplicity in mind, it provides essential editing capabilities while maintaining a tiny codebase written in pure C. Ideal for quick edits or terminal-based workflows.
 
-![cupid Editor Demo](demo.png)  
+![cupid Editor Demo](img/demo.png)  
 
 ## Features
 
