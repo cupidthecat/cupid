@@ -90,22 +90,24 @@ typedef struct EditorConfig {
 
     /* Selection state */
     int selActive;         // 1 if a selection is active, 0 otherwise
-    int selStartX, selStartY; // Where the selection was initiated (the anchor)
+    int selStartX, selStartY; // Where the selection was initiated
 } EditorConfig;
 
 static EditorConfig E;
+
+/* A simple global clipboard buffer for local copy/paste. */
+static char *clipboard = NULL;      
+static size_t clipboard_len = 0;    
 
 void editorScroll() {
     E.rx = E.cx;  // In a simple editor without tabs, rx equals cx
     
     // Vertical scrolling with soft margins
     if (E.cy < E.rowoff + E.scroll_margin) {
-        // Scrolling up - cursor approaching top margin
         E.rowoff = E.cy - E.scroll_margin;
         if (E.rowoff < 0) E.rowoff = 0;
     }
     if (E.cy >= E.rowoff + E.screenrows - E.scroll_margin) {
-        // Scrolling down - cursor approaching bottom margin
         E.rowoff = E.cy - E.screenrows + E.scroll_margin + 1;
         if (E.rowoff < 0) E.rowoff = 0;
     }
@@ -114,12 +116,10 @@ void editorScroll() {
     int screen_width = E.screencols - 6;  // Accounting for line number margin
     
     if (E.rx < E.coloff + E.scroll_margin) {
-        // Scrolling left - cursor approaching left margin
         E.coloff = E.rx - E.scroll_margin;
         if (E.coloff < 0) E.coloff = 0;
     }
     if (E.rx >= E.coloff + screen_width - E.scroll_margin) {
-        // Scrolling right - cursor approaching right margin
         E.coloff = E.rx - screen_width + E.scroll_margin + 1;
         if (E.coloff < 0) E.coloff = 0;
     }
@@ -135,22 +135,19 @@ void editorSetStatusMessage(const char *fmt, ...) {
 }
 
 void editorCenterCursor() {
-    // Center the cursor vertically in the viewport
     if (E.cy < E.numrows) {
         E.rowoff = E.cy - (E.screenrows / 2);
         if (E.rowoff < 0) E.rowoff = 0;
         else if (E.rowoff > E.numrows - E.screenrows)
             E.rowoff = E.numrows - E.screenrows;
-            
-        // Center horizontally too if the line is long enough
+
         int line_length = strlen(E.row[E.cy]);
-        int screen_width = E.screencols - 6;  // Accounting for line number margin
-        
+        int screen_width = E.screencols - 6;  
         if (line_length > screen_width) {
             E.coloff = E.cx - (screen_width / 2);
             if (E.coloff < 0) E.coloff = 0;
         } else {
-            E.coloff = 0;  // If line fits in screen, show from beginning
+            E.coloff = 0;
         }
     }
     editorSetStatusMessage("Centered cursor in viewport");
@@ -207,7 +204,7 @@ int readKey() {
                 if (seq2 == ';') {
                     char seq3;
                     if (read(STDIN_FILENO, &seq3, 1) != 1) return '\x1b';
-                    if (seq3 == '2') { // Modifier 2 usually means SHIFT
+                    if (seq3 == '2') { // SHIFT
                         char seq4;
                         if (read(STDIN_FILENO, &seq4, 1) != 1) return '\x1b';
                         switch(seq4) {
@@ -219,7 +216,6 @@ int readKey() {
                         }
                     }
                 }
-                // Fall back: if not a semicolon sequence, ignore extra characters.
             } else {
                 switch(seq[1]) {
                     case 'A': return ARROW_UP;
@@ -237,7 +233,6 @@ int readKey() {
 
 /* ============== Cursor Movement ============== */
 
-/* Plain arrow moves clear any selection */
 void moveCursor(int key) {
     E.selActive = 0;  // Clear selection when moving without shift
     switch(key) {
@@ -282,13 +277,11 @@ void moveCursor(int key) {
 
 /* Shift–modified arrow keys use this to update selection while moving */
 void editorMoveCursorWithSelection(int key) {
-    /* If no selection is active, start one at the current cursor */
     if (!E.selActive) {
         E.selActive = 1;
         E.selStartX = E.cx;
         E.selStartY = E.cy;
     }
-    /* Then move the cursor (without clearing selection) */
     switch(key) {
         case ARROW_LEFT:
             if (E.cx > 0) {
@@ -331,15 +324,14 @@ void editorMoveCursorWithSelection(int key) {
 
 /* ============== Insertion and Deletion ============== */
 
-/* Insert a character at the current cursor position */
 void editorInsertChar(char c) {
-    if (E.cy >= E.numrows) return; // Out of range
+    if (E.cy >= E.numrows) return;
 
     char *row = E.row[E.cy];
     int rowLen = strlen(row);
     if (E.cx > rowLen) E.cx = rowLen;
 
-    row = realloc(row, rowLen + 2); // +1 for new char, +1 for '\0'
+    row = realloc(row, rowLen + 2);
     if (!row) return;
 
     memmove(&row[E.cx + 1], &row[E.cx], rowLen - E.cx + 1);
@@ -350,7 +342,6 @@ void editorInsertChar(char c) {
     editorSetStatusMessage("Inserted char '%c' at line %d", c, E.cy + 1);
 }
 
-/* Merge one row into the previous row */
 void editorRowMerge(int to, int from) {
     int toLen = strlen(E.row[to]);
     int fromLen = strlen(E.row[from]);
@@ -365,7 +356,6 @@ void editorRowMerge(int to, int from) {
     }
     E.numrows--;
 
-    // Ensure the cursor stays visible after merging
     if (E.cy >= E.numrows) {
         E.cy = E.numrows - 1;
     }
@@ -377,7 +367,6 @@ void editorRowMerge(int to, int from) {
     }
 }
 
-/* Delete the character to the left of the cursor */
 void editorDelChar() {
     if (E.cy >= E.numrows) return;
     if (E.cx == 0 && E.cy == 0) {
@@ -404,7 +393,6 @@ void editorDelChar() {
     }
 }
 
-/* Delete the character under the cursor */
 void editorDelCharForward() {
     if (E.cy >= E.numrows) return;
 
@@ -427,7 +415,6 @@ void editorDelCharForward() {
     }
 }
 
-/* Insert a new line at the cursor position */
 void editorInsertNewline() {
     if (E.cy > E.numrows) return;
 
@@ -442,7 +429,6 @@ void editorInsertNewline() {
         E.row[E.cy] = strdup("");
         E.cy++;
         E.cx = 0;
-        // Fix line number in status message (0-based to 1-based)
         editorSetStatusMessage("Inserted blank line above (line %d)", E.cy);
     } else if (E.cx == rowLen) {
         E.numrows++;
@@ -451,7 +437,6 @@ void editorInsertNewline() {
         E.row[E.cy + 1] = strdup("");
         E.cy++;
         E.cx = 0;
-        // Fix line number in status message (0-based to 1-based)
         editorSetStatusMessage("Inserted blank line after (line %d)", E.cy);
     } else {
         char *newLine = strdup(&row[E.cx]);
@@ -463,10 +448,10 @@ void editorInsertNewline() {
         E.row[E.cy + 1] = newLine;
         E.cy++;
         E.cx = 0;
-        // Fix line number in status message (0-based to 1-based)
         editorSetStatusMessage("Split line %d at position %d", E.cy, 0);
     }
 }
+
 /* ============== File I/O (Save & Open) ============== */
 
 void editorSave() {
@@ -513,121 +498,125 @@ void editorOpen(const char *filename) {
     }
     free(line);
     fclose(fp);
-    
-    // Insert an empty line at the beginning of the file
+
+    /* Insert an empty line at the beginning of the file, if desired: */
     E.numrows++;
     E.row = realloc(E.row, sizeof(char*) * E.numrows);
     memmove(&E.row[1], &E.row[0], sizeof(char*) * (E.numrows - 1));
     E.row[0] = strdup("");
-    
-    // Reset positioning
+
     E.rowoff = 0;
     E.coloff = 0;
     E.cy = 0;
     E.cx = 0;
-    
+
     editorSetStatusMessage("Opened file: %s (%d lines including empty start line)", filename, E.numrows);
     editorRefreshScreen();
 }
 
-/* ============== Base64 Encoding (for OSC 52) ============== */
-
-char *base64_encode(const unsigned char *data, size_t input_length, size_t *output_length) {
-    const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    *output_length = 4 * ((input_length + 2) / 3);
-    char *encoded_data = malloc(*output_length + 1);
-    if (!encoded_data) return NULL;
-    size_t i, j;
-    for (i = 0, j = 0; i < input_length;) {
-        uint32_t octet_a = i < input_length ? data[i++] : 0;
-        uint32_t octet_b = i < input_length ? data[i++] : 0;
-        uint32_t octet_c = i < input_length ? data[i++] : 0;
-
-        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
-
-        encoded_data[j++] = base64_chars[(triple >> 18) & 0x3F];
-        encoded_data[j++] = base64_chars[(triple >> 12) & 0x3F];
-        encoded_data[j++] = (i - 2 < input_length) ? base64_chars[(triple >> 6) & 0x3F] : '=';
-        encoded_data[j++] = (i - 1 < input_length) ? base64_chars[triple & 0x3F] : '=';
-    }
-    encoded_data[j] = '\0';
-    return encoded_data;
-}
-
-/* ============== Copy Selection to Clipboard ============== */
+/* ============== Local Copy/Paste Implementation ============== */
 
 /*
- * This function extracts the text within the current selection (if any),
- * encodes it in base64, and sends it via an OSC 52 escape sequence.
+ * Extract the currently selected text, store it into our local `clipboard`.
+ * (We remove the OSC 52 code to keep it purely local.)
  */
 void copySelection() {
     if (!E.selActive) {
         editorSetStatusMessage("No selection to copy");
         return;
     }
+    /* Calculate start/end row/col of selection. */
     int srow = E.selStartY, scol = E.selStartX;
     int erow = E.cy, ecol = E.cx;
-    /* For same-line selection, ensure the lower column is first */
-    if (srow == erow && scol > ecol) {
-        int temp = scol;
-        scol = ecol;
-        ecol = temp;
-    } else if (srow > erow) { /* If selection was made upward, swap rows */
-        int temp = srow;
-        srow = erow;
-        erow = temp;
-    }
-    size_t copy_buffer_size = 1024;
-    size_t copy_length = 0;
-    char *copy_buffer = malloc(copy_buffer_size);
-    if (!copy_buffer) return;
-    for (int i = srow; i <= erow; i++) {
-        char *line = E.row[i];
-        int line_len = strlen(line);
-        int start = (i == srow) ? scol : 0;
-        int end = (i == erow) ? ecol : line_len;
-        if (start > line_len) start = line_len;
-        if (end > line_len) end = line_len;
-        int segment_length = end - start;
-        if (segment_length < 0) segment_length = 0;
-        if (copy_length + segment_length + 2 > copy_buffer_size) {
-            copy_buffer_size *= 2;
-            copy_buffer = realloc(copy_buffer, copy_buffer_size);
-        }
-        memcpy(copy_buffer + copy_length, line + start, segment_length);
-        copy_length += segment_length;
-        if (i < erow) {
-            copy_buffer[copy_length] = '\n';
-            copy_length++;
-        }
-    }
-    if (copy_length + 1 > copy_buffer_size)
-        copy_buffer = realloc(copy_buffer, copy_length + 1);
-    copy_buffer[copy_length] = '\0';
 
-    size_t b64_length = 0;
-    char *b64_data = base64_encode((const unsigned char *)copy_buffer, copy_length, &b64_length);
-    free(copy_buffer);
-    if (!b64_data) {
-        editorSetStatusMessage("Failed to encode selection");
+    // Normalize if user selected "backwards":
+    if (srow > erow || (srow == erow && scol > ecol)) {
+        int tmpR = srow;  srow = erow;  erow = tmpR;
+        int tmpC = scol; scol = ecol;  ecol = tmpC;
+    }
+
+    /* Free old clipboard, if any. */
+    free(clipboard);
+    clipboard = NULL;
+    clipboard_len = 0;
+
+    /* Gather the text in selection. */
+    size_t buf_size = 1024;
+    size_t buf_used = 0;
+    char *buf = malloc(buf_size);
+    if (!buf) return;
+
+    for (int r = srow; r <= erow; r++) {
+        char *line = E.row[r];
+        int line_len = strlen(line);
+
+        int start_col = (r == srow) ? scol : 0;
+        int end_col   = (r == erow) ? ecol : line_len;
+
+        if (start_col < 0) start_col = 0;
+        if (end_col > line_len) end_col = line_len;
+        if (start_col > end_col) start_col = end_col; 
+
+        int segment_len = end_col - start_col;
+
+        /* Grow buffer if needed. */
+        if (buf_used + segment_len + 2 >= buf_size) {
+            buf_size = buf_size * 2 + segment_len + 2;
+            buf = realloc(buf, buf_size);
+            if (!buf) return;  // out of memory
+        }
+
+        if (segment_len > 0) {
+            memcpy(buf + buf_used, line + start_col, segment_len);
+            buf_used += segment_len;
+        }
+
+        /* Add a newline if this isn't the last line. */
+        if (r < erow) {
+            buf[buf_used] = '\n';
+            buf_used++;
+        }
+    }
+    buf[buf_used] = '\0';
+
+    /* Store in global clipboard. */
+    clipboard = buf;
+    clipboard_len = buf_used;
+
+    editorSetStatusMessage("Copied %zu bytes to clipboard", clipboard_len);
+}
+
+/*
+ * Paste whatever is in `clipboard` at the current cursor.
+ * If there's a selection active, delete it first.
+ */
+void editorPaste() {
+    if (!clipboard || clipboard_len == 0) {
+        editorSetStatusMessage("Clipboard is empty");
         return;
     }
-    char osc_sequence[512];
-    int osc_len = snprintf(osc_sequence, sizeof(osc_sequence), "\x1b]52;c;%s\x07", b64_data);
-    free(b64_data);
-    write(STDOUT_FILENO, osc_sequence, osc_len);
-    editorSetStatusMessage("Copied selection (%d bytes)", copy_length);
+
+    /* If we have a selection active, remove it before pasting. */
+    if (E.selActive) {
+        // Reuse the existing selection-deletion code:
+        extern void editorDeleteSelection();
+        editorDeleteSelection();
+    }
+
+    /* We can insert the clipboard line by line. */
+    for (size_t i = 0; i < clipboard_len; i++) {
+        if (clipboard[i] == '\n') {
+            editorInsertNewline();
+        } else {
+            editorInsertChar(clipboard[i]);
+        }
+    }
+
+    editorSetStatusMessage("Pasted %zu bytes from clipboard", clipboard_len);
 }
 
 /* ============== Improved Selection & Highlighting ============== */
 
-/*
- * Helper: Calculate the selection bounds.
- * For a single-line selection, sCol is the minimum of the anchor and current x,
- * and eCol is the maximum.
- * For multi-line selection, the first line is selected from the anchor column,
- * the last line up to the current column, and any rows in between are fully selected.
- */
 void getSelectionBounds(int *sRow, int *eRow, int *sCol, int *eCol) {
     if (!E.selActive) {
         *sRow = *eRow = *sCol = *eCol = -1;
@@ -657,18 +646,13 @@ void getSelectionBounds(int *sRow, int *eRow, int *sCol, int *eCol) {
 }
 
 void editorDeleteSelection() {
-    if (!E.selActive)
-        return;
+    if (!E.selActive) return;
 
     int sRow, eRow, sCol, eCol;
     getSelectionBounds(&sRow, &eRow, &sCol, &eCol);
-
-    // Safety check
-    if (sRow < 0 || eRow < 0)
-        return;
+    if (sRow < 0 || eRow < 0) return;
 
     if (sRow == eRow) {
-        // Single-line selection: remove characters from sCol to eCol.
         char *line = E.row[sRow];
         int linelen = strlen(line);
         if (sCol < linelen) {
@@ -677,28 +661,20 @@ void editorDeleteSelection() {
         E.cx = sCol;
         E.cy = sRow;
     } else {
-        // Multi-line selection:
-        // 1. Truncate the first line at sCol.
         char *firstLine = E.row[sRow];
         firstLine[sCol] = '\0';
 
-        // 2. Get the remainder of the last line starting at eCol.
         char *lastLine = E.row[eRow];
         char *lastPart = strdup(lastLine + eCol);
 
-        // 3. Merge first line and lastPart.
-        int newLen = sCol + strlen(lastPart);
-        firstLine = realloc(firstLine, newLen + 1);
-        if (!firstLine) return;  // handle allocation error if needed
+        firstLine = realloc(firstLine, sCol + strlen(lastPart) + 1);
         strcat(firstLine, lastPart);
         free(lastPart);
         E.row[sRow] = firstLine;
 
-        // 4. Free all lines between sRow+1 and eRow (inclusive).
         for (int i = sRow + 1; i <= eRow; i++) {
             free(E.row[i]);
         }
-        // 5. Shift remaining rows upward.
         int numDeleted = eRow - sRow;
         for (int i = sRow + 1; i < E.numrows - numDeleted; i++) {
             E.row[i] = E.row[i + numDeleted];
@@ -713,10 +689,6 @@ void editorDeleteSelection() {
 
 /* ============== Output & Refresh ============== */
 
-/*
- * Draw text rows.
- * If a selection is active, only the region between the calculated bounds is highlighted.
- */
 void editorDrawRows(struct abuf *ab) {
     int textRows = E.screenrows;
     int sRow = 0, eRow = 0, sCol = 0, eCol = 0;
@@ -728,20 +700,17 @@ void editorDrawRows(struct abuf *ab) {
     for (int y = 0; y < textRows; y++) {
         int filerow = y + E.rowoff;
         
-        // Check if this row is within the file contents
         if (filerow < E.numrows) {
             char *line = E.row[filerow];
             int linelen = strlen(line);
-            
-            // Show line number (0-based)
-			char lineNumber[16];
+
+            char lineNumber[16];
             snprintf(lineNumber, sizeof(lineNumber), "%4d | ", filerow);
             abAppend(ab, lineNumber, strlen(lineNumber));
-            // Apply horizontal scrolling offset
+
             int start = E.coloff;
             if (start > linelen) start = linelen;
             int len = linelen - start;
-            
             if (len > E.screencols - 6)
                 len = E.screencols - 6;
 
@@ -750,38 +719,33 @@ void editorDrawRows(struct abuf *ab) {
                 int fileCol = x + start;
                 int selected = 0;
 
-                // Correct selection highlighting logic
                 if (E.selActive && filerow >= sRow && filerow <= eRow) {
-                    if (sRow == eRow) {  // Single-line selection
+                    if (sRow == eRow) {
                         if (fileCol >= sCol && fileCol < eCol)
                             selected = 1;
-                    } else if (filerow == sRow) {  // First line of selection
+                    } else if (filerow == sRow) {
                         if (fileCol >= sCol)
                             selected = 1;
-                    } else if (filerow == eRow) {  // Last line of selection
+                    } else if (filerow == eRow) {
                         if (fileCol < eCol)
                             selected = 1;
-                    } else {  // Fully selected rows in between
+                    } else {
                         selected = 1;
                     }
                 }
 
-                // Apply proper highlighting
                 if (selected && !inSelection) {
-                    abAppend(ab, "\x1b[7m", 4);  // Inverse colors (highlight)
+                    abAppend(ab, "\x1b[7m", 4); 
                     inSelection = 1;
                 } else if (!selected && inSelection) {
-                    abAppend(ab, "\x1b[0m", 4);  // Reset to normal colors
+                    abAppend(ab, "\x1b[0m", 4); 
                     inSelection = 0;
                 }
                 abAppend(ab, &line[fileCol], 1);
             }
-
-            // Reset selection at the end of the line
             if (inSelection)
                 abAppend(ab, "\x1b[0m", 4);
         } else {
-            // For empty lines beyond the file content
             abAppend(ab, "     | ", 7);
         }
 
@@ -790,12 +754,11 @@ void editorDrawRows(struct abuf *ab) {
     }
 }
 
-/* Draw the status bar */
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);
     char statusLeft[256], statusRight[256];
     int lenLeft = snprintf(statusLeft, sizeof(statusLeft), "%.20s - %d lines",
-                             (E.filename ? E.filename : "[No Name]"), E.numrows);
+                           (E.filename ? E.filename : "[No Name]"), E.numrows);
     int lenRight = snprintf(statusRight, sizeof(statusRight), "%d/%d", E.cy + 1, E.numrows);
     if (lenLeft > E.screencols) lenLeft = E.screencols;
     abAppend(ab, statusLeft, lenLeft);
@@ -812,7 +775,6 @@ void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\r\n", 2);
 }
 
-/* Draw the message bar */
 void editorDrawMessageBar(struct abuf *ab) {
     abAppend(ab, "\x1b[K", 3);
     int msglen = strlen(E.statusmsg);
@@ -822,26 +784,23 @@ void editorDrawMessageBar(struct abuf *ab) {
     abAppend(ab, "\r\n", 2);
 }
 
-/* Refresh the screen */
 void editorRefreshScreen() {
-    editorScroll();  // Ensure cursor is in view before refreshing
-    
+    editorScroll();  
     struct abuf ab = ABUF_INIT;
-    abAppend(&ab, "\x1b[?25l", 6);  // Hide cursor
-    abAppend(&ab, "\x1b[H", 3);     // Move cursor to top-left
+    abAppend(&ab, "\x1b[?25l", 6);  
+    abAppend(&ab, "\x1b[H", 3);     
 
     editorDrawRows(&ab);
     editorDrawStatusBar(&ab);
     editorDrawMessageBar(&ab);
 
-    // Fix cursor position calculation
     int cursorY = (E.cy - E.rowoff);
-    int cursorX = (E.rx - E.coloff) + 8;  // +6 for line numbers and separator
+    int cursorX = (E.rx - E.coloff) + 8;  
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cursorY, cursorX);
     abAppend(&ab, buf, strlen(buf));
 
-    abAppend(&ab, "\x1b[?25h", 6);  // Show cursor
+    abAppend(&ab, "\x1b[?25h", 6);  
     write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
 }
@@ -861,14 +820,17 @@ void processKeypress() {
         case CTRL_KEY('c'):
             copySelection();
             break;
+        /* NEW: Ctrl+V for local paste */
+        case CTRL_KEY('v'):
+            editorPaste();
+            break;
         case CTRL_KEY('l'):
-            editorCenterCursor();  // New command to center cursor in viewport
+            editorCenterCursor();
             break;
         case '\r':
-            E.selActive = 0; // Cancel selection on newline
+            E.selActive = 0;
             editorInsertNewline();
             break;
-        // Backspace / Ctrl+H handling:
         case 127:
         case CTRL_KEY('h'):
             if (E.selActive) {
@@ -877,7 +839,6 @@ void processKeypress() {
                 editorDelChar();
             }
             break;
-        // Forward delete key:
         case DEL_KEY:
             if (E.selActive) {
                 editorDeleteSelection();
@@ -891,7 +852,6 @@ void processKeypress() {
                 editorInsertChar(' ');
             }
             break;
-        // Movement keys cancel selection:
         case ARROW_LEFT:
         case ARROW_RIGHT:
         case ARROW_UP:
@@ -903,28 +863,28 @@ void processKeypress() {
         case SHIFT_ARROW_LEFT:
             editorMoveCursorWithSelection(ARROW_LEFT);
             editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                                    E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
             break;
         case SHIFT_ARROW_RIGHT:
             editorMoveCursorWithSelection(ARROW_RIGHT);
             editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                                    E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
             break;
         case SHIFT_ARROW_DOWN:
             editorMoveCursorWithSelection(ARROW_DOWN);
-            E.cx = strlen(E.row[E.cy]); // Move to end of line
+            E.cx = strlen(E.row[E.cy]);
             editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                                     E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
             break;
         case SHIFT_ARROW_UP:
             editorMoveCursorWithSelection(ARROW_UP);
-            E.cx = 0; // Move to beginning of line
+            E.cx = 0;
             editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                                     E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
             break;
         default:
             if (isprint(c)) {
-                E.selActive = 0;  // Cancel selection on text input
+                E.selActive = 0;
                 editorInsertChar(c);
             }
             break;
@@ -933,14 +893,13 @@ void processKeypress() {
 
 /* ============== Init & Main ============== */
 
-/* Reserve two lines for the status and message bars */
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
     E.rx = 0;
     E.rowoff = 0;
     E.coloff = 0;
-    E.scroll_margin = 5;   // How many lines to keep as margin from screen edges
+    E.scroll_margin = 5;
     E.numrows = 0;
     E.row = NULL;
     E.filename = NULL;
@@ -949,35 +908,29 @@ void initEditor() {
     E.selActive = 0;
     E.selStartX = 0;
     E.selStartY = 0;
-
-    // Moved getWindowSize to after file loading in main()
 }
 
 int main(int argc, char *argv[]) {
     enableRawMode();
     initEditor();
 
-    // First get window size
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
-    E.screenrows -= 2;  // Reserve 2 lines for status and message bars
+    E.screenrows -= 2;  
 
-    // Then load file (if provided)
     if (argc >= 2) {
         editorOpen(argv[1]);
     } else {
-        // Start with line 0 (empty) and put default text on line 1
         E.numrows = 2;
         E.row = malloc(sizeof(char*) * 2);
         E.row[0] = strdup("");
-        E.row[1] = strdup("Type here... Use Ctrl+S to save, Ctrl+Q to quit, Ctrl+C to copy selection.");
+        E.row[1] = strdup("Type here... Use Ctrl+S to save, Ctrl+Q to quit, Ctrl+C to copy, Ctrl+V to paste.");
         editorSetStatusMessage("New buffer (no filename)");
     }
 
-    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Arrow keys = move | Shift+Arrow = select | Ctrl+C = copy selection");
-    
-    // Remove this explicit call since it's now in editorOpen()
-    // editorRefreshScreen();
+    editorSetStatusMessage(
+        "HELP: Ctrl-S = save | Ctrl-Q = quit | Arrow keys = move | Shift+Arrow = select | Ctrl+C = copy | Ctrl+V = paste"
+    );
 
     while (1) {
         editorRefreshScreen();
