@@ -21,6 +21,7 @@
 | `Ctrl+Q` | Quit |
 | `Ctrl+S` | Save file |
 | `Ctrl+C` | Copy selection to clipboard |
+| `Ctrl+V` | Paste from clipboard |
 | `Ctrl+L` | Center cursor in viewport |
 | `Shift+Arrows` | Select text |
 | `Backspace` | Delete previous character or selection |
