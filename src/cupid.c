@@ -6,11 +6,14 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <time.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <ctype.h>
+
+#include "../lib/cupidconf.h"
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -98,6 +101,123 @@ static EditorConfig E;
 /* A simple global clipboard buffer for local copy/paste. */
 static char *clipboard = NULL;      
 static size_t clipboard_len = 0;    
+
+/* ============== Key Binding Support ============== */
+/*
+ * We define a simple structure for configurable keybindings.
+ * The default bindings are for:
+ *   quit   : CTRL+Q
+ *   save   : CTRL+S
+ *   copy   : CTRL+C
+ *   paste  : CTRL+V
+ *   center : CTRL+L
+ */
+typedef struct KeyBindings {
+    int quit;
+    int save;
+    int copy;
+    int paste;
+    int center;
+} KeyBindings;
+
+KeyBindings kb;  // Global keybindings
+
+/* parse_key() converts a string (from the config) into an int key code.
+ * It understands:
+ *   - A leading '^' (e.g. "^q" becomes CTRL_KEY('q'))
+ *   - Literal names for arrow keys (e.g. "ARROW_UP")
+ *   - Single character strings.
+ */
+int parse_key(const char *str) {
+    if (!str || !*str)
+        return 0;
+    if (str[0] == '^' && str[1] != '\0') {
+        return CTRL_KEY(str[1]);
+    } else if (strcmp(str, "ARROW_LEFT") == 0) {
+        return 1000;  // ARROW_LEFT defined later in processKeypress()'s switch
+    } else if (strcmp(str, "ARROW_RIGHT") == 0) {
+        return 1001;  // ARROW_RIGHT
+    } else if (strcmp(str, "ARROW_UP") == 0) {
+        return 1002;  // ARROW_UP
+    } else if (strcmp(str, "ARROW_DOWN") == 0) {
+        return 1003;  // ARROW_DOWN
+    } else if (strcmp(str, "SHIFT_ARROW_LEFT") == 0) {
+        return SHIFT_ARROW_LEFT;
+    } else if (strcmp(str, "SHIFT_ARROW_RIGHT") == 0) {
+        return SHIFT_ARROW_RIGHT;
+    } else if (strcmp(str, "SHIFT_ARROW_UP") == 0) {
+        return SHIFT_ARROW_UP;
+    } else if (strcmp(str, "SHIFT_ARROW_DOWN") == 0) {
+        return SHIFT_ARROW_DOWN;
+    } else if (strlen(str) == 1) {
+        return str[0];
+    } else {
+        return atoi(str);
+    }
+}
+
+/* loadKeyBindings() looks for a config file at ~/.config/cupid/keybinds.conf.
+ * If not found, it creates a default config file with the standard keybindings.
+ * Then it loads the configuration and updates the global keybindings.
+ */
+void loadKeyBindings(void) {
+    char *home = getenv("HOME");
+    if (!home) {
+        home = ".";
+    }
+    char configDir[1024];  // Increased buffer size
+    char configPath[1024]; // Increased buffer size
+    
+    // Check if paths would fit in buffers
+    if (snprintf(configDir, sizeof(configDir), "%s/.config/cupid", home) >= (int)sizeof(configDir) ||
+        snprintf(configPath, sizeof(configPath), "%s/keybinds.conf", configDir) >= (int)sizeof(configPath)) {
+        fprintf(stderr, "Path too long for config directory\n");
+        return;
+    }
+
+    // Create the directory if it does not exist.
+    struct stat st = {0};
+    if (stat(configDir, &st) == -1) {
+        if (mkdir(configDir, 0755) == -1) {
+            perror("mkdir");
+            return;
+        }
+    }
+
+    // Check if the config file exists.
+    if (access(configPath, F_OK) == -1) {
+        // Create the default config file.
+        FILE *fp = fopen(configPath, "w");
+        if (fp) {
+            fprintf(fp, "# Default keybinds for Cupid Editor\n");
+            fprintf(fp, "quit = ^q\n");
+            fprintf(fp, "save = ^s\n");
+            fprintf(fp, "copy = ^c\n");
+            fprintf(fp, "paste = ^v\n");
+            fprintf(fp, "center = ^l\n");
+            fclose(fp);
+            fprintf(stderr, "Default config created at %s\n", configPath);
+        } else {
+            perror("fopen for default config");
+        }
+    }
+
+    cupidconf_t *conf = cupidconf_load(configPath);
+    if (conf) {
+        const char *bind;
+        bind = cupidconf_get(conf, "quit");
+        if (bind) kb.quit = parse_key(bind);
+        bind = cupidconf_get(conf, "save");
+        if (bind) kb.save = parse_key(bind);
+        bind = cupidconf_get(conf, "copy");
+        if (bind) kb.copy = parse_key(bind);
+        bind = cupidconf_get(conf, "paste");
+        if (bind) kb.paste = parse_key(bind);
+        bind = cupidconf_get(conf, "center");
+        if (bind) kb.center = parse_key(bind);
+        cupidconf_free(conf);
+    }
+}
 
 void editorScroll() {
     E.rx = E.cx;  // In a simple editor without tabs, rx equals cx
@@ -809,85 +929,101 @@ void editorRefreshScreen() {
 
 void processKeypress() {
     int c = readKey();
-    switch (c) {
-        case CTRL_KEY('q'):
-            write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
-            exit(0);
-            break;
-        case CTRL_KEY('s'):
-            editorSave();
-            break;
-        case CTRL_KEY('c'):
-            copySelection();
-            break;
-        /* NEW: Ctrl+V for local paste */
-        case CTRL_KEY('v'):
-            editorPaste();
-            break;
-        case CTRL_KEY('l'):
-            editorCenterCursor();
-            break;
-        case '\r':
-            E.selActive = 0;
-            editorInsertNewline();
-            break;
-        case 127:
-        case CTRL_KEY('h'):
-            if (E.selActive) {
-                editorDeleteSelection();
-            } else {
-                editorDelChar();
-            }
-            break;
-        case DEL_KEY:
-            if (E.selActive) {
-                editorDeleteSelection();
-            } else {
-                editorDelCharForward();
-            }
-            break;
-        case '\t':
-            E.selActive = 0;
-            for (int i = 0; i < 4; i++) {
-                editorInsertChar(' ');
-            }
-            break;
-        case ARROW_LEFT:
-        case ARROW_RIGHT:
-        case ARROW_UP:
-        case ARROW_DOWN:
-            E.selActive = 0;
-            moveCursor(c);
-            editorSetStatusMessage("Moved cursor to line %d", E.cy + 1);
-            break;
-        case SHIFT_ARROW_LEFT:
-            editorMoveCursorWithSelection(ARROW_LEFT);
-            editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
-            break;
-        case SHIFT_ARROW_RIGHT:
-            editorMoveCursorWithSelection(ARROW_RIGHT);
-            editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
-            break;
-        case SHIFT_ARROW_DOWN:
-            editorMoveCursorWithSelection(ARROW_DOWN);
-            E.cx = strlen(E.row[E.cy]);
-            editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
-            break;
-        case SHIFT_ARROW_UP:
-            editorMoveCursorWithSelection(ARROW_UP);
-            E.cx = 0;
-            editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
-                E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
-            break;
-        default:
-            if (isprint(c)) {
+
+    // Check for configurable commands first.
+    if (c == kb.quit) {
+        write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
+        exit(0);
+    } else if (c == kb.save) {
+        editorSave();
+    } else if (c == kb.copy) {
+        copySelection();
+    } else if (c == kb.paste) {
+        editorPaste();
+    } else if (c == kb.center) {
+        editorCenterCursor();
+    }
+    // Handle other keys (newline, backspace, arrow keys, etc.)
+    else if (c == '\r') {
+        E.selActive = 0;
+        editorInsertNewline();
+    } else if (c == 127 || c == CTRL_KEY('h')) {
+        if (E.selActive) {
+            editorDeleteSelection();
+        } else {
+            editorDelChar();
+        }
+    } else if (c == /* DEL_KEY */ 100 /* use your DEL_KEY constant */) {
+        if (E.selActive) {
+            editorDeleteSelection();
+        } else {
+            editorDelCharForward();
+        }
+    } else if (c == '\t') {
+        E.selActive = 0;
+        for (int i = 0; i < 4; i++) {
+            editorInsertChar(' ');
+        }
+    } else {
+        switch (c) {
+            case 1000:  // ARROW_LEFT (example constant; see readKey() below)
+            case 1001:  // ARROW_RIGHT
+            case 1002:  // ARROW_UP
+            case 1003:  // ARROW_DOWN:
                 E.selActive = 0;
-                editorInsertChar(c);
-            }
-            break;
+                moveCursor(c);
+                editorSetStatusMessage("Moved cursor to line %d", E.cy + 1);
+                break;
+            case SHIFT_ARROW_LEFT:
+                editorMoveCursorWithSelection(1000); // ARROW_LEFT
+                editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
+                    E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                break;
+            case SHIFT_ARROW_RIGHT:
+                editorMoveCursorWithSelection(1001); // ARROW_RIGHT
+                editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
+                    E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                break;
+            case SHIFT_ARROW_DOWN:
+                editorMoveCursorWithSelection(1003); // ARROW_DOWN
+                E.cx = strlen(E.row[E.cy]);
+                editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
+                    E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                break;
+            case SHIFT_ARROW_UP:
+                editorMoveCursorWithSelection(1002); // ARROW_UP
+                E.cx = 0;
+                editorSetStatusMessage("Selected from (%d,%d) to (%d,%d)",
+                    E.selStartY + 1, E.selStartX + 1, E.cy + 1, E.cx + 1);
+                break;
+            default:
+                if (isprint(c)) {
+                    E.selActive = 0;
+                    editorInsertChar(c);
+                }
+                break;
+        }
+    }
+}
+
+const char* keyToString(int key) {
+    static char buf[32];
+    if (key >= 1000 && key <= 1003) {
+        const char *arrows[] = {"←", "→", "↑", "↓"};
+        return arrows[key - 1000];
+    } else if (key >= 2000 && key <= 2003) {
+        const char *shiftArrows[] = {"Shift+←", "Shift+→", "Shift+↑", "Shift+↓"};
+        return shiftArrows[key - 2000];
+    } else if (key == CTRL_KEY(' ')) {
+        return "Ctrl+Space";
+    } else if (key < 32) {
+        snprintf(buf, sizeof(buf), "Ctrl+%c", key + 64);
+        return buf;
+    } else if (key < 256 && isprint(key)) {
+        snprintf(buf, sizeof(buf), "%c", key);
+        return buf;
+    } else {
+        return "Custom";
     }
 }
 
@@ -914,9 +1050,19 @@ int main(int argc, char *argv[]) {
     enableRawMode();
     initEditor();
 
+    // Set default keybindings.
+    kb.quit = CTRL_KEY('q');
+    kb.save = CTRL_KEY('s');
+    kb.copy = CTRL_KEY('c');
+    kb.paste = CTRL_KEY('v');
+    kb.center = CTRL_KEY('l');
+
+    // Load (or create) the keybinds config.
+    loadKeyBindings();
+
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
-    E.screenrows -= 2;  
+    E.screenrows -= 2;
 
     if (argc >= 2) {
         editorOpen(argv[1]);
@@ -924,12 +1070,16 @@ int main(int argc, char *argv[]) {
         E.numrows = 2;
         E.row = malloc(sizeof(char*) * 2);
         E.row[0] = strdup("");
-        E.row[1] = strdup("Type here... Use Ctrl+S to save, Ctrl+Q to quit, Ctrl+C to copy, Ctrl+V to paste.");
+        E.row[1] = strdup("Type here... Use your configured keybinds (e.g. save, quit, etc.)");
         editorSetStatusMessage("New buffer (no filename)");
     }
 
     editorSetStatusMessage(
-        "HELP: Ctrl-S = save | Ctrl-Q = quit | Arrow keys = move | Shift+Arrow = select | Ctrl+C = copy | Ctrl+V = paste"
+        "HELP: Use your configured keybinds | %s = save | %s = quit | %s = copy | %s = paste",
+        (kb.save == CTRL_KEY('s') ? "Ctrl+S" : keyToString(kb.save)),
+        (kb.quit == CTRL_KEY('q') ? "Ctrl+Q" : keyToString(kb.quit)),
+        (kb.copy == CTRL_KEY('c') ? "Ctrl+C" : keyToString(kb.copy)),
+        (kb.paste == CTRL_KEY('v') ? "Ctrl+V" : keyToString(kb.paste))
     );
 
     while (1) {

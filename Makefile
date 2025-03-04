@@ -3,7 +3,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -pedantic -std=c11
 TARGET = cupid
-SRC = src/cupid.c  # Fix: Correct the source path
+SRC = src/cupid.c lib/cupidconf.c  # Fix: Correct the source path
 
 all: $(TARGET)
 
