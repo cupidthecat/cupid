@@ -20,8 +20,10 @@
 #include "../include/clipboard.h"
 #include "../include/fileio.h"
 #include "../include/globals.h"
+
 EditorConfig E;
 KeyBindings kb;
+
 int main(int argc, char *argv[]) {
     enableRawMode();
     initEditor();

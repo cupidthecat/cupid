@@ -40,47 +40,45 @@ void editorSave() {
  * Updates editor state and shows status message.
  */
 void editorOpen(const char *filename) {
-    E.filename = strdup(filename);
-    FILE *fp = fopen(filename, "r");
-    if (!fp) {
-        FILE *empty = fopen(filename, "w");
-        if (!empty) die("fopen");
-        fclose(empty);
-        fp = fopen(filename, "r");
-        if (!fp) die("fopen");
-    }
-    char *line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
-    E.numrows = 0;
-    E.row = NULL;
-    
-    char buffer[1024];
-    while (fgets(buffer, sizeof(buffer), fp)) {
-        linelen = strlen(buffer);
-        while (linelen > 0 && (buffer[linelen - 1] == '\n' ||
-                               buffer[linelen - 1] == '\r'))
-            linelen--;
-        buffer[linelen] = '\0';
-        E.numrows++;
-        E.row = realloc(E.row, sizeof(char*) * E.numrows);
-        E.row[E.numrows - 1] = strdup(buffer);
-    }
+	E.filename = strdup(filename);
+	FILE *fp = fopen(filename, "r");
+	if (!fp) {
+		FILE *empty = fopen(filename, "w");
+		if (!empty) die("fopen");
+		fclose(empty);
+		fp = fopen(filename, "r");
+		if (!fp) die("fopen");
+	}
 
-    free(line);
-    fclose(fp);
+	ssize_t linelen;
+	E.numrows = 0;
+	E.row = NULL;
 
-    /* Insert an empty line at the beginning of the file, if desired: */
-    E.numrows++;
-    E.row = realloc(E.row, sizeof(char*) * E.numrows);
-    memmove(&E.row[1], &E.row[0], sizeof(char*) * (E.numrows - 1));
-    E.row[0] = strdup("");
+	char buffer[1024];
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		linelen = strlen(buffer);
+		while (linelen > 0 && (buffer[linelen - 1] == '\n' ||
+		                       buffer[linelen - 1] == '\r'))
+			linelen--;
+		buffer[linelen] = '\0';
+		E.numrows++;
+		E.row = realloc(E.row, sizeof(char*) * E.numrows);
+		E.row[E.numrows - 1] = strdup(buffer);
+	}
 
-    E.rowoff = 0;
-    E.coloff = 0;
-    E.cy = 0;
-    E.cx = 0;
+	fclose(fp);
 
-    editorSetStatusMessage("Opened file: %s (%d lines including empty start line)", filename, E.numrows);
-    editorRefreshScreen();
+	/* Insert an empty line at the beginning of the file, if desired: */
+	E.numrows++;
+	E.row = realloc(E.row, sizeof(char*) * E.numrows);
+	memmove(&E.row[1], &E.row[0], sizeof(char*) * (E.numrows - 1));
+	E.row[0] = strdup("");
+
+	E.rowoff = 0;
+	E.coloff = 0;
+	E.cy = 0;
+	E.cx = 0;
+
+	editorSetStatusMessage("Opened file: %s (%d lines including empty start line)", filename, E.numrows);
+	editorRefreshScreen();
 }
